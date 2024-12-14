@@ -51,3 +51,12 @@ def slug_for_args(note):
     # И возвращает кортеж, который содержит slug заметки.
     # На то, что это кортеж, указывает запятая в конце выражения.
     return (note.slug,)
+
+
+@pytest.fixture
+def form_data():
+    return {
+        'title': 'Это новая заметка',
+        'text': 'С другим текстом',
+        'slug': 'new-slug'
+    }
