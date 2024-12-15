@@ -4,82 +4,97 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from news.models import News, Comment
+from notes.models import Note
 
 User = get_user_model()
 
 
 class TestRoutes(TestCase):
 
-    # создаём новость
+    # фикстуры
     @classmethod
     def setUpTestData(cls):
-        cls.news = News.objects.create(title='Заголовок', text='Текст')
-        cls.author = User.objects.create(username='Ербол')
-        cls.reader = User.objects.create(username='Еркен Незарегистрированный')
-        # От имени одного пользователя создаём комментарий к новости:
-        cls.comment = Comment.objects.create(
-            news=cls.news,
-            author=cls.author,
-            text='Текст комментария'
-        )
+        cls.author = User.objects.create(username='Автор')
+        cls.note = Note.objects.create(title='Заголовок',
+                                       text='Текст',
+                                       slug='note-slug',
+                                       author=cls.author)
+        cls.notauthor = User.objects.create(username='Неавтор')
 
+    # доступность заглавной, логина, логаута и регистрации для анонима
     def test_home_page(self):
-        # Вместо прямого указания адреса
-        # получаем его при помощи функции reverse().
-        url = reverse('news:home')
-        response = self.client.get(url)
-        # Проверяем, что код ответа равен статусу OK (он же 200).
-        self.assertEqual(response.status_code, HTTPStatus.OK)
-
-    def test_detail_page(self):
-        url = reverse('news:detail', kwargs={'pk': self.news.id})
-        response = self.client.get(url)
-        self.assertEqual(response.status_code, HTTPStatus.OK)
-
-    def test_pages_availability(self):
         urls = (
-            ('news:home', None),
-            ('news:detail', {'pk': self.news.id}),
-            ('users:login', None),
-            ('users:logout', None),
-            ('users:signup', None),
+            'notes:home',
+            'users:login',
+            'users:logout',
+            'users:signup',
         )
-        for name, kwargs in urls:
-            with self.subTest(name=name):
-                url = reverse(name, kwargs=kwargs)
+        for url_name in urls:
+            with self.subTest(name=url_name):
+                url = reverse(url_name)
                 response = self.client.get(url)
                 self.assertEqual(response.status_code, HTTPStatus.OK)
 
-    def test_availability_for_comment_edit_and_delete(self):
-        users_statuses = (
-            (self.author, HTTPStatus.OK),
-            (self.reader, HTTPStatus.NOT_FOUND),
+    # доступность списка, добавления, успеха для залогиненого
+    def test_user_routes(self):
+        urls = (
+            'notes:list',
+            'notes:add',
+            'notes:success',
         )
-        for user, status in users_statuses:
-            # Логиним пользователя в клиенте:
-            self.client.force_login(user)
-            # Для каждой пары "пользователь - ожидаемый ответ"
-            # перебираем имена тестируемых страниц:
-            for name in ('news:edit', 'news:delete'):
-                with self.subTest(user=user, name=name):
-                    url = reverse(name, args=(self.comment.id,))
-                    response = self.client.get(url)
-                    self.assertEqual(response.status_code, status)
+        self.client.force_login(self.author)
+        for url_name in urls:
+            with self.subTest(name=url_name):
+                url = reverse(url_name)
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, HTTPStatus.OK)
 
-    def test_redirect_for_anonymous_client(self):
-        # Сохраняем адрес страницы логина:
+    # доступность заметки, удаления, редактирования для автора
+    def test_author_routes(self):
+        urls_args = (
+            'notes:detail',
+            'notes:edit',
+            'notes:delete',
+        )
+        self.client.force_login(self.author)
+        for url_name in urls_args:
+            with self.subTest(name=url_name):
+                url = reverse(url_name, kwargs={'slug': self.note.slug})
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, HTTPStatus.OK)
+
+    # недоступность заметки, удаления, редактирования для неавтора
+    def test_notauthor_routes(self):
+        urls_args = (
+            'notes:detail',
+            'notes:edit',
+            'notes:delete',
+        )
+        self.client.force_login(self.notauthor)
+        for url_name in urls_args:
+            with self.subTest(name=url_name):
+                url = reverse(url_name, kwargs={'slug': self.note.slug})
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
+
+    # редирект анонима на логин при любых действиях
+    def test_redirect_for_anonymous(self):
+        # Ожидаемый адрес страницы логина
         login_url = reverse('users:login')
+        urls_args = (
+            ('notes:list', None),
+            ('notes:add', None),
+            ('notes:success', None),
+            ('notes:detail', {'slug': self.note.slug}),
+            ('notes:edit', {'slug': self.note.slug}),
+            ('notes:delete', {'slug': self.note.slug}),
+        )
         # В цикле перебираем имена страниц, с которых ожидаем редирект:
-        for name in ('news:edit', 'news:delete'):
-            with self.subTest(name=name):
-                # Получаем адрес страницы редактирования или удаления комментария:
-                url = reverse(name, args=(self.comment.id,))
-                # Получаем ожидаемый адрес страницы логина, 
-                # на который будет перенаправлен пользователь.
-                # Учитываем, что в адресе будет параметр next, в котором передаётся
-                # адрес страницы, с которой пользователь был переадресован.
+        for urlname, kwargs in urls_args:
+            with self.subTest(name=urlname):
+                url = reverse(urlname, kwargs=kwargs)
+                # Получаем ожидаемый адрес страницы логина
                 redirect_url = f'{login_url}?next={url}'
                 response = self.client.get(url)
                 # Проверяем, что редирект приведёт именно на указанную ссылку.
-                self.assertRedirects(response, redirect_url) 
+                self.assertRedirects(response, redirect_url)
