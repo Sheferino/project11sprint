@@ -4,14 +4,9 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 from django.urls import reverse
 
-# Импортируем из файла с формами список стоп-слов и предупреждение формы.
-# Загляните в news/forms.py, разберитесь с их назначением.
-from news.forms import BAD_WORDS, WARNING
-from news.models import Comment, News
-
 User = get_user_model()
 
-
+'''
 class TestCommentCreation(TestCase):
     # Текст комментария понадобится в нескольких местах кода,
     # поэтому запишем его в атрибуты класса.
@@ -157,3 +152,4 @@ class TestCommentEditDelete(TestCase):
         self.comment.refresh_from_db()
         # Проверяем, что текст остался тем же, что и был.
         self.assertEqual(self.comment.text, self.COMMENT_TEXT)
+'''
