@@ -1,155 +1,156 @@
-from http import HTTPStatus
-
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ObjectDoesNotExist
 from django.test import Client, TestCase
 from django.urls import reverse
+from pytils.translit import slugify
+
+from notes.models import Note
+from notes.forms import WARNING
 
 User = get_user_model()
 
-'''
-class TestCommentCreation(TestCase):
-    # Текст комментария понадобится в нескольких местах кода,
-    # поэтому запишем его в атрибуты класса.
-    COMMENT_TEXT = 'Текст комментария'
 
+class TestNotesLogic(TestCase):
+
+    # создаём контент для проверок
     @classmethod
     def setUpTestData(cls):
-        cls.news = News.objects.create(title='Заголовок', text='Текст')
-        # Адрес страницы с новостью.
-        cls.url = reverse('news:detail', args=(cls.news.id,))
-        # Создаём пользователя и клиент, логинимся в клиенте.
-        cls.user = User.objects.create(username='Мимо Крокодил')
-        cls.auth_client = Client()
-        cls.auth_client.force_login(cls.user)
-        # Данные для POST-запроса при создании комментария.
-        cls.form_data = {'text': cls.COMMENT_TEXT}
+        cls.author = User.objects.create(username='Автор')
+        # отдельно словарь для сохранения исходных параметров
+        cls.note_data = {
+            'title': 'Заголовок',
+            'text': 'Текст',
+            'slug': 'note-slug',
+            'author': cls.author
+        }
+        cls.note = Note.objects.create(**cls.note_data)
+        cls.form_data = {
+            'title': 'Заголовок из формы',
+            'text': 'Текст из формы',
+            'slug': 'slug-from-form'
+        }
+        # просто пользователь и его клиент
+        cls.user = User.objects.create(username='Пользователь')
+        cls.simple_auth_client = Client()
+        cls.simple_auth_client.force_login(cls.user)
 
-    def test_anonymous_user_cant_create_comment(self):
-        # определяем количество комментариев на текущий момент
-        comments_count_before = Comment.objects.count()
-        # Совершаем запрос от анонимного клиента, в POST-запросе отправляем
-        # предварительно подготовленные данные формы с текстом комментария
-        self.client.post(self.url, data=self.form_data)
-        # Считаем количество комментариев.
-        comments_count_after = Comment.objects.count()
-        # Ожидаем, что количество комментариев не изменилось
-        self.assertEqual(comments_count_after, comments_count_before)
+    # пользователь может создать заметку
+    def test_user_creation_note(self):
+        # определяем начальное количество заметок
+        notes_count = Note.objects.count()
+        url = reverse('notes:add')
+        # запрос от пользователя
+        response = self.simple_auth_client.post(url, data=self.form_data)
+        # Проверяем, что был выполнен редирект
+        self.assertRedirects(response, reverse('notes:success'))
+        # проверяем, что количество заметок увеличилось
+        assert Note.objects.count() == notes_count + 1
+        # Чтобы проверить значения полей заметки -
+        # получаем её из базы при помощи метода get():
+        new_note = Note.objects.get(slug=self.form_data['slug'])
+        # Сверяем атрибуты объекта с ожидаемыми.
+        assert new_note.title == self.form_data['title']
+        assert new_note.text == self.form_data['text']
+        assert new_note.slug == self.form_data['slug']
+        assert new_note.author == self.user
 
-    def test_user_can_create_comment(self):
-        # определяем количество комментариев на текущий момент
-        comments_count_before = Comment.objects.count()
-        # Совершаем запрос через авторизованный клиент.
-        response = self.auth_client.post(self.url, data=self.form_data)
-        # Проверяем, что редирект привёл к разделу с комментами.
-        self.assertRedirects(response, f'{self.url}#comments')
-        # Считаем количество комментариев после отравки
-        comments_count_after = Comment.objects.count()
-        # Убеждаемся, что есть один комментарий.
-        self.assertEqual(comments_count_after, comments_count_before + 1)
-        # Получаем последний объект комментария из базы.
-        comment = Comment.objects.last()
-        # Проверяем, что все атрибуты комментария совпадают с ожидаемыми.
-        self.assertEqual(comment.text, self.COMMENT_TEXT)
-        self.assertEqual(comment.news, self.news)
-        self.assertEqual(comment.author, self.user)
+    # аноним не может создать заметку
+    def test_anonymous_creation_note(self):
+        # определяем начальное количество заметок
+        notes_count = Note.objects.count()
+        url = reverse('notes:add')
+        login_url = reverse('users:login')
+        redirect_url = f'{login_url}?next={url}'
+        # запрос от анонима
+        response = self.client.post(url, data=self.form_data)
+        # Проверяем, что был выполнен редирект на логин
+        self.assertRedirects(response, redirect_url)
+        # проверяем, что количество заметок не увеличилось
+        assert Note.objects.count() == notes_count
 
-    def test_user_cant_use_bad_words(self):
-        # Формируем данные для отправки формы; текст включает
-        # первое слово из списка стоп-слов.
-        bad_words_data = {'text': f'Какой-то текст, {BAD_WORDS[0]}, еще текст'}
-        # Отправляем запрос через авторизованный клиент.
-        response = self.auth_client.post(self.url, data=bad_words_data)
-        # Проверяем, есть ли в ответе ошибка формы.
-        self.assertFormError(
-            response,
-            form='form',
-            field='text',
-            errors=WARNING
-        )
-        # Дополнительно убедимся, что комментарий не был создан.
-        # неустойчивый подход, считается что для тестов создана пустая БД
-        # если в какой-то момент в SetUpTestData будет добавлен коммент
-        # этот тест провалится
-        comments_count = Comment.objects.count()
-        self.assertEqual(comments_count, 0)
+    # невозможно создать две заметки с одинаковым slug
+    def test_not_unique_slug(self):
+        # определяем начальное количество заметок
+        notes_count = Note.objects.count()
+        url = reverse('notes:add')
+        # Подменяем slug новой заметки на slug уже существующей записи:
+        self.form_data['slug'] = self.note.slug
+        # Пытаемся создать новую заметку:
+        response = self.simple_auth_client.post(url, data=self.form_data)
+        # Проверяем, что в ответе содержится ошибка формы для поля slug:
+        self.assertFormError(response, 'form', 'slug',
+                             errors=(self.form_data['slug'] + WARNING))
+        # Убеждаемся, что количество заметок в базе не увеличилось
+        assert Note.objects.count() == notes_count
 
+    # slug формируется автоматически
+    def test_slugify_empty_slug(self):
+        # определяем начальное количество заметок
+        notes_count = Note.objects.count()
+        url = reverse('notes:add')
+        # Убираем поле slug из словаря формы
+        self.form_data.pop('slug')
+        response = self.simple_auth_client.post(url, data=self.form_data)
+        # Проверяем, что даже без slug заметка была создана
+        self.assertRedirects(response, reverse('notes:success'))
+        # проверяем, что количество заметок увеличилось
+        assert Note.objects.count() == notes_count + 1
+        # Формируем ожидаемый slug:
+        expected_slug = slugify(self.form_data['title'])
+        # убеждаемся, что заметка с таким slug создана
+        self.assertIsInstance(Note.objects.get(slug=expected_slug), Note)
 
-class TestCommentEditDelete(TestCase):
-    # Тексты для комментариев не нужно дополнительно создавать
-    # (в отличие от объектов в БД), им не нужны ссылки на self или cls,
-    # поэтому их можно перечислить просто в атрибутах класса.
-    COMMENT_TEXT = 'Текст комментария'
-    NEW_COMMENT_TEXT = 'Обновлённый комментарий'
+    # автор может редактировать заметку
+    def test_author_can_edit_note(self):
+        # Получаем адрес страницы редактирования заметки:
+        url = reverse('notes:edit', args=(self.note.slug,))
+        # В POST-запросе на адрес редактирования заметки
+        # отправляем form_data - новые значения для полей заметки:
+        self.client.force_login(self.author)
+        response = self.client.post(url, data=self.form_data)
+        # Проверяем редирект:
+        self.assertRedirects(response, reverse('notes:success'))
+        # Обновляем объект заметки note: получаем обновлённые данные из БД:
+        self.note.refresh_from_db()
+        # Проверяем, что атрибуты заметки соответствуют обновлённым:
+        for attr_name in ['title', 'text', 'slug']:
+            self.assertEqual(getattr(self.note, attr_name),
+                             self.form_data.get(attr_name))
 
-    @classmethod
-    def setUpTestData(cls):
-        # Создаём новость в БД.
-        cls.news = News.objects.create(title='Заголовок', text='Текст')
-        # Формируем адрес блока с комментариями, который понадобится для тестов.
-        # Адрес новости.
-        news_url = reverse('news:detail', args=(cls.news.id,))
-        # Адрес блока с комментариями.
-        cls.url_to_comments = news_url + '#comments'
-        # Создаём пользователя - автора комментария.
-        cls.author = User.objects.create(username='Автор комментария')
-        # Создаём клиент для пользователя-автора.
-        cls.author_client = Client()
-        # "Логиним" пользователя в клиенте.
-        cls.author_client.force_login(cls.author)
-        # Делаем всё то же самое для пользователя-читателя.
-        cls.reader = User.objects.create(username='Читатель')
-        cls.reader_client = Client()
-        cls.reader_client.force_login(cls.reader)
-        # Создаём объект комментария.
-        cls.comment = Comment.objects.create(
-            news=cls.news,
-            author=cls.author,
-            text=cls.COMMENT_TEXT
-        )
-        # URL для редактирования комментария.
-        cls.edit_url = reverse('news:edit', args=(cls.comment.id,))
-        # URL для удаления комментария.
-        cls.delete_url = reverse('news:delete', args=(cls.comment.id,))
-        # Формируем данные для POST-запроса по обновлению комментария.
-        cls.form_data = {'text': cls.NEW_COMMENT_TEXT}
+    # автор может удалить заметку
+    def test_author_can_delete_note(self):
+        # Получаем адрес страницы редактирования заметки:
+        url = reverse('notes:delete', args=(self.note.slug,))
+        self.client.force_login(self.author)
+        response = self.client.post(url)
+        # Проверяем редирект:
+        self.assertRedirects(response, reverse('notes:success'))
+        # убеждаемся, что такой заметки больше нет
+        with self.assertRaises(ObjectDoesNotExist, msg='Заметки больше нет'):
+            Note.objects.get(pk=self.note.pk)
 
-    def test_author_can_delete_comment(self):
-        # От имени автора комментария отправляем DELETE-запрос на удаление.
-        response = self.author_client.delete(self.delete_url)
-        # Проверяем, что редирект привёл к разделу с комментариями.
-        # Заодно проверим статус-коды ответов.
-        self.assertRedirects(response, self.url_to_comments)
-        # Считаем количество комментариев в системе.
-        comments_count = Comment.objects.count()
-        # Ожидаем ноль комментариев в системе.
-        self.assertEqual(comments_count, 0)
+    # посторонний не может редактировать заметку, она остаётся прежней
+    def test_notauthor_cant_edit_note(self):
+        # Получаем адрес страницы редактирования заметки:
+        url = reverse('notes:edit', args=(self.note.slug,))
+        # В POST-запросе на адрес редактирования заметки
+        # отправляем form_data - новые значения для полей заметки:
+        self.simple_auth_client.post(url, data=self.form_data)
+        # Обновляем объект заметки note: получаем обновлённые данные из БД:
+        self.note.refresh_from_db()
+        # Проверяем, что атрибуты заметки остались прежние
+        for attr_name in ['title', 'text', 'slug']:
+            self.assertEqual(getattr(self.note, attr_name),
+                             self.note_data.get(attr_name))
 
-    def test_user_cant_delete_comment_of_another_user(self):
-        # Выполняем запрос на удаление от пользователя-читателя.
-        response = self.reader_client.delete(self.delete_url)
-        # Проверяем, что вернулась 404 ошибка.
-        self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
-        # Убедимся, что комментарий по-прежнему на месте.
-        comments_count = Comment.objects.count()
-        self.assertEqual(comments_count, 1)
-
-    def test_author_can_edit_comment(self):
-        # Выполняем запрос на редактирование от имени автора комментария.
-        response = self.author_client.post(self.edit_url, data=self.form_data)
-        # Проверяем, что сработал редирект.
-        self.assertRedirects(response, self.url_to_comments)
-        # Обновляем объект комментария.
-        self.comment.refresh_from_db()
-        # Проверяем, что текст комментария соответствует обновленному.
-        self.assertEqual(self.comment.text, self.NEW_COMMENT_TEXT)
-
-    def test_user_cant_edit_comment_of_another_user(self):
-        # Выполняем запрос на редактирование от имени другого пользователя.
-        response = self.reader_client.post(self.edit_url, data=self.form_data)
-        # Проверяем, что вернулась 404 ошибка.
-        self.assertEqual(response.status_code, HTTPStatus.NOT_FOUND)
-        # Обновляем объект комментария.
-        self.comment.refresh_from_db()
-        # Проверяем, что текст остался тем же, что и был.
-        self.assertEqual(self.comment.text, self.COMMENT_TEXT)
-'''
+    # посторонний не может удалить заметку
+    def test_notauthor_cant_delete_note(self):
+        # Получаем адрес страницы редактирования заметки:
+        url = reverse('notes:delete', args=(self.note.slug,))
+        self.client.post(url)
+        # Обновляем объект заметки note. Заодно убеждаемся, что она не удалена
+        self.note.refresh_from_db()
+        # Проверяем, что атрибуты заметки остались прежние
+        for attr_name in ['title', 'text', 'slug']:
+            self.assertEqual(getattr(self.note, attr_name),
+                             self.note_data.get(attr_name))
