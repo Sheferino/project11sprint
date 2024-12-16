@@ -15,7 +15,10 @@ class TestNotesLogic(TestCase):
     # создаём контент для проверок
     @classmethod
     def setUpTestData(cls):
+        # автор и его клиент
         cls.author = User.objects.create(username='Автор')
+        cls.author_client = Client()
+        cls.author_client.force_login(cls.author)
         # отдельно словарь для сохранения исходных параметров
         cls.note_data = {
             'title': 'Заголовок',
@@ -39,16 +42,13 @@ class TestNotesLogic(TestCase):
         # определяем начальное количество заметок
         notes_count = Note.objects.count()
         url = reverse('notes:add')
-        # запрос от пользователя
         response = self.simple_auth_client.post(url, data=self.form_data)
         # Проверяем, что был выполнен редирект
         self.assertRedirects(response, reverse('notes:success'))
         # проверяем, что количество заметок увеличилось
         assert Note.objects.count() == notes_count + 1
-        # Чтобы проверить значения полей заметки -
-        # получаем её из базы при помощи метода get():
-        new_note = Note.objects.get(slug=self.form_data['slug'])
         # Сверяем атрибуты объекта с ожидаемыми.
+        new_note = Note.objects.get(slug=self.form_data['slug'])
         assert new_note.title == self.form_data['title']
         assert new_note.text == self.form_data['text']
         assert new_note.slug == self.form_data['slug']
@@ -61,7 +61,6 @@ class TestNotesLogic(TestCase):
         url = reverse('notes:add')
         login_url = reverse('users:login')
         redirect_url = f'{login_url}?next={url}'
-        # запрос от анонима
         response = self.client.post(url, data=self.form_data)
         # Проверяем, что был выполнен редирект на логин
         self.assertRedirects(response, redirect_url)
@@ -75,7 +74,6 @@ class TestNotesLogic(TestCase):
         url = reverse('notes:add')
         # Подменяем slug новой заметки на slug уже существующей записи:
         self.form_data['slug'] = self.note.slug
-        # Пытаемся создать новую заметку:
         response = self.simple_auth_client.post(url, data=self.form_data)
         # Проверяем, что в ответе содержится ошибка формы для поля slug:
         self.assertFormError(response, 'form', 'slug',
@@ -88,31 +86,25 @@ class TestNotesLogic(TestCase):
         # определяем начальное количество заметок
         notes_count = Note.objects.count()
         url = reverse('notes:add')
-        # Убираем поле slug из словаря формы
         self.form_data.pop('slug')
         response = self.simple_auth_client.post(url, data=self.form_data)
         # Проверяем, что даже без slug заметка была создана
         self.assertRedirects(response, reverse('notes:success'))
         # проверяем, что количество заметок увеличилось
         assert Note.objects.count() == notes_count + 1
-        # Формируем ожидаемый slug:
+        # убеждаемся, что создана заметка с ожидаемым slug
         expected_slug = slugify(self.form_data['title'])
-        # убеждаемся, что заметка с таким slug создана
         self.assertIsInstance(Note.objects.get(slug=expected_slug), Note)
 
     # автор может редактировать заметку
     def test_author_can_edit_note(self):
-        # Получаем адрес страницы редактирования заметки:
         url = reverse('notes:edit', args=(self.note.slug,))
-        # В POST-запросе на адрес редактирования заметки
-        # отправляем form_data - новые значения для полей заметки:
-        self.client.force_login(self.author)
-        response = self.client.post(url, data=self.form_data)
+        # отправляем form_data - новые значения для полей заметки
+        response = self.author_client.post(url, data=self.form_data)
         # Проверяем редирект:
         self.assertRedirects(response, reverse('notes:success'))
-        # Обновляем объект заметки note: получаем обновлённые данные из БД:
+        # Проверяем, что новые атрибуты заметки соответствуют заданным
         self.note.refresh_from_db()
-        # Проверяем, что атрибуты заметки соответствуют обновлённым:
         for attr_name in ['title', 'text', 'slug']:
             self.assertEqual(getattr(self.note, attr_name),
                              self.form_data.get(attr_name))
@@ -121,8 +113,7 @@ class TestNotesLogic(TestCase):
     def test_author_can_delete_note(self):
         # Получаем адрес страницы редактирования заметки:
         url = reverse('notes:delete', args=(self.note.slug,))
-        self.client.force_login(self.author)
-        response = self.client.post(url)
+        response = self.author_client.post(url)
         # Проверяем редирект:
         self.assertRedirects(response, reverse('notes:success'))
         # убеждаемся, что такой заметки больше нет
@@ -131,14 +122,10 @@ class TestNotesLogic(TestCase):
 
     # посторонний не может редактировать заметку, она остаётся прежней
     def test_notauthor_cant_edit_note(self):
-        # Получаем адрес страницы редактирования заметки:
         url = reverse('notes:edit', args=(self.note.slug,))
-        # В POST-запросе на адрес редактирования заметки
-        # отправляем form_data - новые значения для полей заметки:
         self.simple_auth_client.post(url, data=self.form_data)
-        # Обновляем объект заметки note: получаем обновлённые данные из БД:
-        self.note.refresh_from_db()
         # Проверяем, что атрибуты заметки остались прежние
+        self.note.refresh_from_db()
         for attr_name in ['title', 'text', 'slug']:
             self.assertEqual(getattr(self.note, attr_name),
                              self.note_data.get(attr_name))

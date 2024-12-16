@@ -40,7 +40,7 @@ class TestContent(TestCase):
     def test_pages_contains_form(self):
         urls = (
             ('notes:add', None),
-            ('notes:edit', {'slug':self.note.slug})
+            ('notes:edit', {'slug': self.note.slug})
         )
         for url_name, kwargs in urls:
             url = reverse(url_name, kwargs=kwargs)
